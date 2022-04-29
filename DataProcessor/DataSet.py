@@ -1,4 +1,4 @@
-#!/usr/bin/env python2
+#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
 Created on Wed May  6 20:29:02 2020
@@ -30,10 +30,7 @@ normErr         = list of normalization errors
 
 isNormalized  = the set is considered normalized, 
                 i.e. the theory computation will be normalized to the data
-normalizationMethod = the method to normalize the data to the theory
-                currently the following methods of normalization are realised:
-                    'integral'  normalize to the partial (bin-by-bin) integral of the data
-                    'bestChi2'  normalize to such that the chi^2 is minimal
+normalizationMethod = the method to normalize hte data to the theory
 
 V             = covariance matrix
 invV          = inverse covariance matrix
@@ -54,8 +51,8 @@ class DataSet:
     def __init__(self,name,processType):
         """ name=short name
         """
-        if not(processType=="DY" or processType=="SIDIS"):
-            raise Exception('processType must be DY or SIDIS. Received value : {}'.format(processType))
+        if not(processType=="DY" or processType=="SIDIS" or processType=="DY_mT"):
+            raise Exception('processType must be DY, SIDIS or DY_mT. Received value : {}'.format(processType))
                 
         self.processType=processType
         self.name=name
@@ -86,10 +83,9 @@ class DataSet:
         self.numOfNormErr=-1
         
         self.V=[] # covariance matrix 
-        self.L=[] # Cholesky decomposition of covariant matrix
+        self.invV=[] # inverse covariance matrix
         self.matrixA=[] # matrix of systemtic shifts
         self.matrixAinverse=[]
-        self.isVdiagonal=False ## If V is diagonal (i.e. not correlated errors)
         
         # the list of list correlated errors for each point
         # contains point-to-point correlations and normalization correlations
@@ -156,7 +152,7 @@ class DataSet:
         ### 1) fill fields with numbers of errors + fill list of corr.error for each point
         self.numOfUncorrErr=len(self.points[0]["uncorrErr"])
         self.numOfCorrErr=len(self.points[0]["corrErr"])
-        self.numOfNormErr=len(self.normErr)        
+        self.numOfNormErr=len(self.normErr)
         
         for p in self.points:
             if(len(p["uncorrErr"]) != self.numOfUncorrErr):
@@ -165,17 +161,12 @@ class DataSet:
                 print('DataSet.Finalize:: Mismatch in the leght of corrErr for point',p.identifier,' in data set: ',self.name)
             
         
-        ### 2) Calculate covariace matrices        
-        
+        ### 2) Calculate covariace matrices
         if computeCovarianceMatrix:
-            if(self.numOfCorrErr==0 and self.numOfNormErr==0) :
-                self.isVdiagonal=True
-            else:
-                self.isVdiagonal=False
             self._computeListOfCorrErrors()
             self._computeListOfVariances()
             self._CalculateV()
-            self._CholeskyDecompositionForV()
+            self.invV=numpy.linalg.inv(self.V)
             self._CalculateA()
             self.matrixAinverse=numpy.linalg.inv(self.matrixA)
         
@@ -226,7 +217,7 @@ class DataSet:
         
         # populate with points
         for p in self.points:
-            pPass, pAdd=cutFunction(copy.deepcopy(p))
+            pPass, pAdd=cutFunction(p)
             if pPass:
                 dNew.AddPoint(pAdd)
         
@@ -247,17 +238,26 @@ class DataSet:
         
         for i in range(self.numberOfPoints):
             for j in range(self.numberOfPoints):
-                ## diagonal term is uncorrelated error SQUARED, already precalculated
-                if i==j:                    
-                    self.V[i][j]+=self._listOfVariances[i]
-                ## off-diagonal term is correlated errors, already precalculated
-                self.V[i][j]+=numpy.dot(self._listOfCorrErrors[i],self._listOfCorrErrors[j])
+                ## diagonal term
+                if i==j:
+                    a=numpy.array(self.points[i]["uncorrErr"])                    
+                    self.V[i][j]+=numpy.sum(a**2)
+                
+                ## correlated errors 
+                a=numpy.array(self.points[i]["corrErr"])
+                b=numpy.array(self.points[j]["corrErr"])
+                self.V[i][j]+=numpy.sum(a*b)
+                
+                ## normalization errors
+                a=numpy.array(self.normErr)*self.points[i]["xSec"]
+                b=numpy.array(self.normErr)*self.points[j]["xSec"]
+                
+                self.V[i][j]+=numpy.sum(a*b)
        
      
     def _computeListOfCorrErrors(self):
         """
-        Compute the list of correlated errors for each point. 
-        It is equals to [corrErr]+[xSec*normErr]
+        Compute the list of correlated errors for each point.
         """
         dummy=numpy.zeros((self.numberOfPoints,self.numOfCorrErr+self.numOfNormErr))
         
@@ -280,61 +280,13 @@ class DataSet:
                 dummy[i]+=err**2
             
         self._listOfVariances=dummy
-    
-    def _CholeskyDecompositionForV(self):
-        """
-        Compute Cholesky decomposition for covariance matrix
-
-        Returns
-        -------
-        None.
-
-        """
-        #### if the V is diagonal then L=sqrt(V)
-        if(self.isVdiagonal):
-            self.L=numpy.sqrt(self.V)
-        else:
-            ### code is taken from Rosseta project
-            self.L = [[0.0] * len(self.V) for _ in range(len(self.V))]
-            for i, (Ai, Li) in enumerate(zip(self.V, self.L)):
-                for j, Lj in enumerate(self.L[:i+1]):
-                    s = sum(Li[k] * Lj[k] for k in range(j))
-                    Li[j] = numpy.sqrt(Ai[i] - s) if (i == j) else \
-                              (1.0 / Lj[j] * (Ai[j] - s))
-                          
-    def _MultiplyByLInv(self,a):
-        """
-        Returns the product L^({)-1)*a,
-        where L is Choletsky decomposed part of the matrix, a is an array.
-        Computation by 
-
-        Parameters
-        ----------
-        a : list of floats            
-
-        Returns
-        -------
-        L^(-1)*a
-
-        """
-        x=[]
-        for i in range(self.numberOfPoints):
-            x.append((a[i]-numpy.sum([self.L[i][j]*x[j] for j in range(len(x))]))/self.L[i][i])
-            
-        return x
-        
-        
+      
     def _CalculateA(self):
         """ Evaluate the matrix A which is needed for the estimation of systematic shifts.
         
         The matrix A defined as 
         A[a,b]=delta[a,b]+sum(corrErr[a,i]corrErr[b,i]/(uncorrErr[i]^2), i in number of points)
         """
-        
-        if(self.isVdiagonal):
-            self.matrixA=numpy.identity(0)
-            return
-        
         ## determine the number of correlated errors
         sc=self.numOfCorrErr+self.numOfNormErr
         
@@ -373,18 +325,14 @@ class DataSet:
         ## weight theory with proper factor
         for i in range(self.numberOfPoints):
             res.append(theoryPrediction[i]*self.points[i]["thFactor"])
-        
-        ##if necessary normalize
+
+        ##if nessecary normalize
         if self.isNormalized:
             if self.normalizationMethod=="integral":
                 ### normalization by bin-by-bin area
                 normTh=sum([(self.points[i]["qT"][1]-self.points[i]["qT"][0])*res[i] for i in range(self.numberOfPoints)])
                 norm=self._normExp/normTh       
                 return [v*norm for v in res]
-            elif self.normalizationMethod=="bestChi2":                
-                ### normalization by best chi^2 value
-                normTh=self.FindBestNorm(res)                
-                return [v*normTh for v in res]
         else:
             return res                  
     
@@ -403,9 +351,10 @@ class DataSet:
             chi^2
 
         """
+
         diffX=[(theoryPrediction[i]-self.points[i]["xSec"]) for i in range(self.numberOfPoints)]
-        Lx=self._MultiplyByLInv(diffX)
-        return numpy.dot(Lx,Lx)
+        chi2out=numpy.matmul(diffX,numpy.matmul(self.invV,diffX))
+        return chi2out
     
     def DetermineSystematicShift(self,theoryPrediction):
         """
@@ -461,7 +410,7 @@ class DataSet:
         dd=self.DetermineSystematicShift(theoryPrediction)
         tmp=[]
         for i in range(len(dd)):
-            if self.points[i]["xSec"]!=0:
+            if self.points[i]["xSec"]!=0.:
                 tmp.append(dd[i]/self.points[i]["xSec"])
             
         return sum(tmp)/len(dd)
@@ -509,27 +458,6 @@ class DataSet:
             chiL+=lambd[i]**2
         
         return [chiD,chiL,chiD+chiL]
-    
-    def FindBestNorm(self,theoryPrediction):
-        """
-        Evaluate the best common norm for the theory that minimizes the chi^2
-        It is equl to n=(t V^{-1} xSec)/(t V^{-1} t), 
-        where t is theory prediction, xSec is experimental values, and V is covariance matrix
-
-        Parameters
-        ----------
-        theoryPrediction : list of floats
-             List theory predictions (matched) to be compared to the data
-
-        Returns
-        -------
-        Float, values of norm
-
-        """
-        Ls=self._MultiplyByLInv([p["xSec"] for p in self.points])
-        Lt=self._MultiplyByLInv(theoryPrediction)
-        return numpy.dot(Ls,Lt)/numpy.dot(Lt,Lt)
-        
 
         
     def GenerateReplica(self,includeNormInV=True):
@@ -576,7 +504,6 @@ class DataSet:
             # update xSec value
             # (old+uncorr*RND+corr*globalRND)*(1+norm)
             ## uncorrelated part
-            
             for err in p["uncorrErr"]:
                 pNew["xSec"]+=numpy.random.normal()*err
             # correlated part
@@ -584,7 +511,6 @@ class DataSet:
                 pNew["xSec"]+=corrRND[i]*p["corrErr"][i]
             # multiply by norm-error-distirbution
             pNew["xSec"]=pNew["xSec"]*resFactor
-            
             
 
             ##the point-errors should be rescaled by normalization factor
@@ -596,7 +522,6 @@ class DataSet:
                 pNew["corrErr"].append(err*resFactor)
             #
             dNew.AddPoint(pNew)
-            
         
         dNew.FinalizeSet()   
         return dNew
@@ -772,13 +697,13 @@ def LoadCSV(path):
     if not os.path.exists(path):
         raise FileNotFoundError('data-set-file '+path+' NOT FOUND')
         
-    file=open(path,"r")
+    file=open(path, 'r+', encoding='utf-8')
     
     ## read header of
     line=file.readline()
     line=line.split(",")
     name=line[1].replace("\n","")
-    
+
     line=file.readline()    
     line=line.split(",")
     comment=line[1].replace("\n","")
@@ -791,18 +716,19 @@ def LoadCSV(path):
     line=file.readline()    
     line=line.split(",")
     processType=(line[1]).replace("\n","")
+
     
     line=file.readline()    
     line=line.split(",")   
-    nPoints=int(line[1])
+    nPoints=int(line[1].replace("\n",""))
     
     line=file.readline()    
     line=line.split(",")
-    nUncorrErr=int(line[1])
+    nUncorrErr=int(line[1].replace("\n",""))
     
     line=file.readline()    
     line=line.split(",")
-    nCorrErr=int(line[1])
+    nCorrErr=int(line[1].replace("\n",""))
     
     ### create a Data set
     dSet=DataSet(name, processType)
@@ -813,7 +739,7 @@ def LoadCSV(path):
     ###    continue to read header
     line=file.readline()    
     line=line.split(",")
-    nNormErr=int(line[1])
+    nNormErr=int(line[1].replace("\n",""))
     
     line=file.readline()    
     line=line.split(",")
@@ -840,6 +766,8 @@ def LoadCSV(path):
         line=line.split(",")
         if processType=="DY":
             p=Point.CreateDYPoint(line[0])
+        elif processType=="DY_mT":
+            p=Point.CreateDYmTPoint(line[0])
         elif processType=="SIDIS":
             p=Point.CreateSIDISPoint(line[0])
         else:
@@ -851,6 +779,7 @@ def LoadCSV(path):
             k=2
         else:
             k=1
+            
         p["s"]=float(line[k+1])
         p["<Q>"]=float(line[k+2])
         p["Q"]=[float(line[k+3]),float(line[k+4])]
@@ -870,6 +799,15 @@ def LoadCSV(path):
             p["z"]=[float(line[k+5]),float(line[k+6])]
             p["<pT>"]=float(line[k+7])
             p["pT"]=[float(line[k+8]),float(line[k+9])]
+            k=k+9
+            
+        elif processType=="DY_mT":
+            p["<y>"]=float(line[k+1])
+            p["y"]=[float(line[k+2]),float(line[k+3])]
+            p["<qT>"]=float(line[k+4])
+            p["qT"]=[float(line[k+5]),float(line[k+6])]
+            p["<mT>"]=float(line[k+7])
+            p["mT"]=[float(line[k+8]),float(line[k+9])]
             k=k+9
             
         else:

@@ -1,4 +1,4 @@
-#!/usr/bin/env python2
+#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
 Created on Fri May  8 14:52:27 2020
@@ -13,21 +13,11 @@ from . import DataMultiSet
 
 
 def ComputeXSec(data,method="default"):
-    """Computes the cross-section values for the given data and match it to data
-
-    Parameters
-    ----------
-    data : DataSet or DataMultiSet or a point-like dictionary    
-    method : String, optional
-        Parameters for evaluation of xSec. The default is "default".
+    """ Computes the cross-section values for the given data (matched to data)
+    data can be: DataSet or DataMultiSet or a point-like dictionary
+    methods are:
         default = usual one
         binless = evaluated with avarage values of bins only
-
-    Returns
-    -------
-    YY : TYPE
-        DESCRIPTION.
-
     """
     if isinstance(data,DataSet.DataSet) or isinstance(data,DataMultiSet.DataMultiSet):
         YY=_ComputeXSec_Data(data,method)
@@ -56,6 +46,17 @@ def _ComputeXSec_Data(data,method="default"):
                                     [d["y"] for d in data.points],
                                     [d["includeCuts"] for d in data.points],
                                     [d["cutParams"] for d in data.points])
+        
+        if data.processType == "DY_mT":
+            XX=harpy.DY.xSecmTList([d["process"] for d in data.points],
+                                    [d["s"] for d in data.points],
+                                    [d["qT"] for d in data.points],
+                                    [d["Q"] for d in data.points],
+                                    [d["y"] for d in data.points],
+                                    [d["mT"] for d in data.points],
+                                    [d["includeCuts"] for d in data.points],
+                                    [d["cutParams"] for d in data.points])
+
             
         elif data.processType=="SIDIS":
             XX=harpy.SIDIS.xSecList([d["process"] for d in data.points],
@@ -119,6 +120,10 @@ def _ComputeXSec_Data(data,method="default"):
                                     [[d["M_target"],d["M_product"]] for d in data.points])
      
     YY=data.MatchWithData(XX)
+    for i in range(len(YY)):
+        if YY[i]<0.:
+            YY[i]=100000.
+
     return YY
 
 def _ComputeXSec_Point(p,method="default"):
@@ -133,6 +138,9 @@ def _ComputeXSec_Point(p,method="default"):
         if p["type"] == "DY":
             XX1=harpy.DY.xSecList([p["process"]],[p["s"]],[p["qT"]],[p["Q"]],
                                     [p["y"]],[p["includeCuts"]],[p["cutParams"]])
+        elif p["type"] == "DY_mT":
+            XX1=harpy.DY.xSecmTList([p["process"]],[p["s"]],[p["qT"]],[p["Q"]],
+                                    [p["y"]],[p["mT"]],[p["includeCuts"]],[p["cutParams"]])
             
         elif p["type"]=="SIDIS":
             XX1=harpy.SIDIS.xSecList([p["process"]],[p["s"]],[p["pT"]],[p["z"]],
@@ -180,23 +188,8 @@ def _ComputeXSec_Point(p,method="default"):
     return XX
 
 def ComputeChi2(data,method="default"):
-    """
-    Computes the chi^2 values for the given data    
+    """ Computes the chi^2 values for the given data    
     data can be: DataSet or DataMultiSet
-
-    Parameters
-    ----------
-    data : DataSet or DataMultiSet
-        The data-set for which the chi2 computed
-    method : string
-        method for computation of xSec(see). The default is "default".
-
-    Returns
-    -------
-    float , [float,float,...]
-        The first number is chi^2 for total data-set
-        The second array is the list of chi^2 for each experiment in the data set
-
     """
     YY=ComputeXSec(data,method)
     
@@ -204,10 +197,8 @@ def ComputeChi2(data,method="default"):
     
     if isinstance(data,DataSet.DataSet):
         return ZZ, [ZZ]
-    elif isinstance(data,DataMultiSet.DataMultiSet):
-        return ZZ
     else:
-        raise ValueError("data-argument maust be DataSet or DataMultiSet")
+        return ZZ
 
 def PrintChi2Table(data,method="default",printSysShift=True,printDecomposedChi2=False):
     """
@@ -267,7 +258,7 @@ def PrintChi2Table(data,method="default",printSysShift=True,printDecomposedChi2=
     line="{:{width}}".format("name",width=maxLength)+' | '+'  N  '+' | '
     line2="{:-<{width}}".format("",width=maxLength)+'-|-'+'-----'+'-|-'
     if printDecomposedChi2:
-        line+=' chiL^2/N '+' | '+' chiD^2/N '+' | '+' chi^2/N  '+' | '
+        line+=' chiD^2/N '+' | '+' chiL^2/N '+' | '+' chi^2/N  '+' | '
         line2+='----------'+'-|-'+'----------'+'-|-'+'----------'+'-|-'
     else:
         line+=' chi^2/N  '+' | '
@@ -282,30 +273,24 @@ def PrintChi2Table(data,method="default",printSysShift=True,printDecomposedChi2=
     #Only one set in MultiSet of just Set
     if len(chi2Part)==1:
         line="{:{width}} | {:5d} |".format(data.name,data.numberOfPoints,width=maxLength)
-        dataNumP=data.numberOfPoints
-        if(dataNumP==0): dataNumP=1
         if printDecomposedChi2:
             line+=" {:10.3f} | {:10.3f} | {:10.3f} |".format(
-                decChi2[0]/dataNumP,decChi2[1]/dataNumP,decChi2[2]/dataNumP)
+                decChi2[0]/data.numberOfPoints,decChi2[1]/data.numberOfPoints,decChi2[2]/data.numberOfPoints)
         else:
-            line+=" {:10.3f} |".format(chi2T/dataNumP)
+            line+=" {:10.3f} |".format(chi2T/data.numberOfPoints)
         if printSysShift:
             line+=" {:10.3f} |".format(shift*100)
         print(line)
     else:
         for i in range(len(chi2Part)):
             line="{:{width}} | {:5d} |".format(data.sets[i].name,data.sets[i].numberOfPoints,width=maxLength)
-            
-            dataNumP=data.sets[i].numberOfPoints
-            if(dataNumP==0): dataNumP=1
-            
             if printDecomposedChi2:
                 line+=" {:10.3f} | {:10.3f} | {:10.3f} |".format(
-                    decChi2[i][0]/dataNumP,
-                    decChi2[i][1]/dataNumP,
-                    decChi2[i][2]/dataNumP)
+                    decChi2[i][0]/data.sets[i].numberOfPoints,
+                    decChi2[i][1]/data.sets[i].numberOfPoints,
+                    decChi2[i][2]/data.sets[i].numberOfPoints)
             else:
-                line+=" {:10.3f} |".format(chi2Part[i]/dataNumP)
+                line+=" {:10.3f} |".format(chi2Part[i]/data.sets[i].numberOfPoints)
             if printSysShift:
                 line+=" {:10.3f} |".format(shift[i]*100)
             print(line)
